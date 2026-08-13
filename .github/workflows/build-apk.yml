@@ -28,6 +28,15 @@ jobs:
       - name: Install Android SDK 36
         run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
 
+      - name: Restore persistent debug signing key
+        env:
+          VR_DEBUG_KEYSTORE_B64: ${{ secrets.VR_DEBUG_KEYSTORE_B64 }}
+        run: |
+          mkdir -p "$HOME/.android"
+          printf '%s' "$VR_DEBUG_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey >/dev/null
+
       - name: Set up Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
         with:
