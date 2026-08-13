@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">Голосовые напоминания</string>
+    <string name="widget_title">Голосом</string>
+    <string name="widget_description">Быстро создать голосовое напоминание</string>
 </resources>
