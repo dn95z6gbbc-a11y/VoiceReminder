@@ -206,7 +206,7 @@ private fun ReminderAppScreen(
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
-                    "Версия 0.2 — системный ассистент",
+                    "Версия 0.4 — виджет и повторы",
                     style = MaterialTheme.typography.bodySmall
                 )
                 Spacer(Modifier.height(14.dp))
@@ -285,9 +285,10 @@ private fun ReminderAppScreen(
         ManualReminderDialog(
             initialTitle = "",
             initialWhen = ZonedDateTime.now().plusHours(1).withSecond(0).withNano(0),
+            initialRepeat = Reminder.REPEAT_NONE,
             onDismiss = { showManual = false },
-            onSave = { title, epoch ->
-                val reminder = store.insert(title, epoch)
+            onSave = { title, epoch, repeatRule ->
+                val reminder = store.insert(title, epoch, repeatRule)
                 scheduler.schedule(reminder)
                 showManual = false
                 reload()
@@ -300,11 +301,12 @@ private fun ReminderAppScreen(
         ManualReminderDialog(
             initialTitle = current.title,
             initialWhen = Instant.ofEpochMilli(current.scheduledAt).atZone(ZoneId.systemDefault()),
+            initialRepeat = current.repeatRule,
             onDismiss = { editingReminder = null },
-            onSave = { title, epoch ->
+            onSave = { title, epoch, repeatRule ->
                 scheduler.cancel(current.id)
                 ReminderNotifications.cancel(context, current.id)
-                store.update(current.id, title, epoch)
+                store.update(current.id, title, epoch, repeatRule)
                 store.get(current.id)?.let { scheduler.schedule(it) }
                 editingReminder = null
                 reload()
@@ -407,10 +409,16 @@ private fun ReminderRow(
             formatEpoch(if (active) reminder.scheduledAt else reminder.completedAt ?: reminder.scheduledAt),
             style = MaterialTheme.typography.bodyMedium
         )
+        if (reminder.isRepeating) {
+            Spacer(Modifier.height(3.dp))
+            Text(repeatLabel(reminder.repeatRule), style = MaterialTheme.typography.bodySmall)
+        }
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (active) {
+            if (active && !reminder.isRepeating) {
                 FilledTonalButton(onClick = onDone) { Text("Готово") }
+            }
+            if (active) {
                 TextButton(onClick = onEdit) { Text("Изменить") }
             }
             TextButton(onClick = onDelete) { Text("Удалить") }
@@ -422,12 +430,14 @@ private fun ReminderRow(
 private fun ManualReminderDialog(
     initialTitle: String,
     initialWhen: ZonedDateTime,
+    initialRepeat: String,
     onDismiss: () -> Unit,
-    onSave: (String, Long) -> Unit
+    onSave: (String, Long, String) -> Unit
 ) {
     val context = LocalContext.current
     var title by remember(initialTitle) { mutableStateOf(initialTitle) }
     var whenAt by remember(initialWhen) { mutableStateOf(initialWhen) }
+    var repeatRule by remember(initialRepeat) { mutableStateOf(initialRepeat) }
 
     fun pickDate() {
         DatePickerDialog(
@@ -455,7 +465,7 @@ private fun ManualReminderDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Новое напоминание") },
+        title = { Text("Напоминание") },
         text = {
             Column {
                 TextField(
@@ -473,12 +483,40 @@ private fun ManualReminderDialog(
                         Text(whenAt.format(DateTimeFormatter.ofPattern("HH:mm")))
                     }
                 }
+                Spacer(Modifier.height(14.dp))
+                Text("Повтор", fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(6.dp))
+                RepeatOption(
+                    text = "Без повтора",
+                    selected = repeatRule == Reminder.REPEAT_NONE,
+                    onClick = { repeatRule = Reminder.REPEAT_NONE }
+                )
+                RepeatOption(
+                    text = "Каждый час",
+                    selected = repeatRule == Reminder.REPEAT_HOURLY,
+                    onClick = { repeatRule = Reminder.REPEAT_HOURLY }
+                )
+                RepeatOption(
+                    text = "Каждый день",
+                    selected = repeatRule == Reminder.REPEAT_DAILY,
+                    onClick = { repeatRule = Reminder.REPEAT_DAILY }
+                )
+                RepeatOption(
+                    text = "Каждую неделю",
+                    selected = repeatRule == Reminder.REPEAT_WEEKLY,
+                    onClick = { repeatRule = Reminder.REPEAT_WEEKLY }
+                )
+                RepeatOption(
+                    text = "Каждый месяц",
+                    selected = repeatRule == Reminder.REPEAT_MONTHLY,
+                    onClick = { repeatRule = Reminder.REPEAT_MONTHLY }
+                )
             }
         },
         confirmButton = {
             TextButton(
                 enabled = title.isNotBlank() && whenAt.isAfter(ZonedDateTime.now()),
-                onClick = { onSave(title.trim(), whenAt.toInstant().toEpochMilli()) }
+                onClick = { onSave(title.trim(), whenAt.toInstant().toEpochMilli(), repeatRule) }
             ) {
                 Text("Сохранить")
             }
@@ -487,6 +525,24 @@ private fun ManualReminderDialog(
             TextButton(onClick = onDismiss) { Text("Отмена") }
         }
     )
+}
+
+@Composable
+private fun RepeatOption(text: String, selected: Boolean, onClick: () -> Unit) {
+    TextButton(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onClick
+    ) {
+        Text(if (selected) "✓ $text" else text)
+    }
+}
+
+private fun repeatLabel(rule: String): String = when (rule) {
+    Reminder.REPEAT_HOURLY -> "↻ Каждый час"
+    Reminder.REPEAT_DAILY -> "↻ Каждый день"
+    Reminder.REPEAT_WEEKLY -> "↻ Каждую неделю"
+    Reminder.REPEAT_MONTHLY -> "↻ Каждый месяц"
+    else -> ""
 }
 
 private fun formatEpoch(epoch: Long): String {
