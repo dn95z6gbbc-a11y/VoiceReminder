@@ -1,5 +1,6 @@
 package com.example.voicereminder.voice
 
+import com.example.voicereminder.data.Reminder
 import java.time.DayOfWeek
 import java.time.ZonedDateTime
 import java.time.temporal.TemporalAdjusters
@@ -7,7 +8,8 @@ import java.util.Locale
 
 data class ParsedReminder(
     val title: String,
-    val scheduledAt: Long
+    val scheduledAt: Long,
+    val repeatRule: String = Reminder.REPEAT_NONE
 )
 
 object RussianReminderParser {
@@ -39,17 +41,36 @@ object RussianReminderParser {
     )
 
     fun parse(raw: String, now: ZonedDateTime = ZonedDateTime.now()): ParsedReminder? {
-        var text = normalize(raw)
-        if (text.isBlank()) return null
+        val normalized = normalize(raw)
+        if (normalized.isBlank()) return null
+
+        val repeat = parseRepeat(normalized)
+        val repeatRule = repeat?.first ?: Reminder.REPEAT_NONE
+        val text = repeat?.second?.let { normalized.replace(it, " ") } ?: normalized
 
         parseDuration(text, now)?.let { (whenAt, matched) ->
             val title = cleanTitle(text.replace(matched, ""))
-            return ParsedReminder(title, whenAt.toInstant().toEpochMilli())
+            return ParsedReminder(title, whenAt.toInstant().toEpochMilli(), repeatRule)
         }
 
-        val timeInfo = parseTime(text) ?: return null
-        val (hour, minute, timeMatched) = timeInfo
+        val timeInfo = parseTime(text)
+        if (timeInfo == null) {
+            if (repeatRule == Reminder.REPEAT_NONE) return null
+            val first = when (repeatRule) {
+                Reminder.REPEAT_HOURLY -> now.plusHours(1)
+                Reminder.REPEAT_DAILY -> now.plusDays(1)
+                Reminder.REPEAT_WEEKLY -> now.plusWeeks(1)
+                Reminder.REPEAT_MONTHLY -> now.plusMonths(1)
+                else -> return null
+            }.withSecond(0).withNano(0)
+            return ParsedReminder(
+                title = cleanTitle(text),
+                scheduledAt = first.toInstant().toEpochMilli(),
+                repeatRule = repeatRule
+            )
+        }
 
+        val (hour, minute, timeMatched) = timeInfo
         var targetDate = now.toLocalDate()
         var dateMatched = ""
 
@@ -83,12 +104,8 @@ object RussianReminderParser {
         }
 
         var target = targetDate.atTime(hour, minute).atZone(now.zone)
-
         val hasExplicitDate = dateMatched.isNotBlank()
-        if (!hasExplicitDate && !target.isAfter(now)) {
-            target = target.plusDays(1)
-        }
-
+        if (!hasExplicitDate && !target.isAfter(now)) target = target.plusDays(1)
         if (!target.isAfter(now)) return null
 
         val titleSource = text
@@ -101,8 +118,23 @@ object RussianReminderParser {
 
         return ParsedReminder(
             title = cleanTitle(titleSource),
-            scheduledAt = target.toInstant().toEpochMilli()
+            scheduledAt = target.toInstant().toEpochMilli(),
+            repeatRule = repeatRule
         )
+    }
+
+    private fun parseRepeat(text: String): Pair<String, String>? {
+        val patterns = listOf(
+            Reminder.REPEAT_HOURLY to Regex("""(?<![а-я0-9])(каждый\s+час|ежечасно|раз\s+в\s+час)(?![а-я0-9])"""),
+            Reminder.REPEAT_DAILY to Regex("""(?<![а-я0-9])(каждый\s+день|ежедневно|раз\s+в\s+день)(?![а-я0-9])"""),
+            Reminder.REPEAT_WEEKLY to Regex("""(?<![а-я0-9])(каждую\s+неделю|еженедельно|раз\s+в\s+неделю)(?![а-я0-9])"""),
+            Reminder.REPEAT_MONTHLY to Regex("""(?<![а-я0-9])(каждый\s+месяц|ежемесячно|раз\s+в\s+месяц)(?![а-я0-9])""")
+        )
+        for ((rule, regex) in patterns) {
+            val match = regex.find(text)
+            if (match != null) return rule to match.value
+        }
+        return null
     }
 
     private fun parseDuration(text: String, now: ZonedDateTime): Pair<ZonedDateTime, String>? {
