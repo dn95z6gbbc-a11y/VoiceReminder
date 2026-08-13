@@ -53,9 +53,7 @@ class ReminderRecognitionService : RecognitionService() {
                 listener.partialResults(partialResults ?: Bundle.EMPTY)
             }
 
-            override fun onEvent(eventType: Int, params: Bundle?) {
-                listener.event(eventType, params ?: Bundle.EMPTY)
-            }
+            override fun onEvent(eventType: Int, params: Bundle?) = Unit
         })
         recognizer.startListening(recognizerIntent)
     }
