@@ -17,17 +17,22 @@ class ReminderStore(context: Context) :
                 scheduled_at INTEGER NOT NULL,
                 status TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
-                completed_at INTEGER
+                completed_at INTEGER,
+                repeat_rule TEXT NOT NULL DEFAULT 'NONE'
             )
             """.trimIndent()
         )
         db.execSQL("CREATE INDEX idx_reminders_status_time ON reminders(status, scheduled_at)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE reminders ADD COLUMN repeat_rule TEXT NOT NULL DEFAULT 'NONE'")
+        }
+    }
 
     @Synchronized
-    fun insert(title: String, scheduledAt: Long): Reminder {
+    fun insert(title: String, scheduledAt: Long, repeatRule: String = Reminder.REPEAT_NONE): Reminder {
         val now = System.currentTimeMillis()
         val values = ContentValues().apply {
             put("title", title)
@@ -35,9 +40,10 @@ class ReminderStore(context: Context) :
             put("status", Reminder.STATUS_ACTIVE)
             put("created_at", now)
             putNull("completed_at")
+            put("repeat_rule", repeatRule)
         }
         val id = writableDatabase.insertOrThrow("reminders", null, values)
-        return Reminder(id, title, scheduledAt, Reminder.STATUS_ACTIVE, now, null)
+        return Reminder(id, title, scheduledAt, Reminder.STATUS_ACTIVE, now, null, repeatRule)
     }
 
     @Synchronized
@@ -79,12 +85,13 @@ class ReminderStore(context: Context) :
     }
 
     @Synchronized
-    fun update(id: Long, title: String, scheduledAt: Long) {
+    fun update(id: Long, title: String, scheduledAt: Long, repeatRule: String = Reminder.REPEAT_NONE) {
         val values = ContentValues().apply {
             put("title", title)
             put("scheduled_at", scheduledAt)
             put("status", Reminder.STATUS_ACTIVE)
             putNull("completed_at")
+            put("repeat_rule", repeatRule)
         }
         writableDatabase.update("reminders", values, "id=?", arrayOf(id.toString()))
     }
@@ -118,15 +125,16 @@ class ReminderStore(context: Context) :
             createdAt = getLong(getColumnIndexOrThrow("created_at")),
             completedAt = getColumnIndexOrThrow("completed_at").let { idx ->
                 if (isNull(idx)) null else getLong(idx)
-            }
+            },
+            repeatRule = getString(getColumnIndexOrThrow("repeat_rule"))
         )
     }
 
     companion object {
         private const val DB_NAME = "voice_reminders.db"
-        private const val DB_VERSION = 1
+        private const val DB_VERSION = 2
         private val COLUMNS = arrayOf(
-            "id", "title", "scheduled_at", "status", "created_at", "completed_at"
+            "id", "title", "scheduled_at", "status", "created_at", "completed_at", "repeat_rule"
         )
     }
 }
