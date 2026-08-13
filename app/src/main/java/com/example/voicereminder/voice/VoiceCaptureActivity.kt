@@ -155,7 +155,7 @@ class VoiceCaptureActivity : ComponentActivity(), RecognitionListener {
         }
 
         val store = ReminderStore(this)
-        val reminder = store.insert(parsed.title, parsed.scheduledAt)
+        val reminder = store.insert(parsed.title, parsed.scheduledAt, parsed.repeatRule)
         AlarmScheduler(this).schedule(reminder)
 
         val formatter = DateTimeFormatter.ofPattern("d MMMM, HH:mm", Locale("ru"))
