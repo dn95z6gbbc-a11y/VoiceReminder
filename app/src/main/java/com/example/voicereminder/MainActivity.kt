@@ -5,6 +5,7 @@ import android.app.AlarmManager
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.app.role.RoleManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -12,6 +13,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.service.voice.VoiceInteractionService
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -54,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.voicereminder.alarm.AlarmScheduler
+import com.example.voicereminder.assistant.ReminderVoiceInteractionService
 import com.example.voicereminder.alarm.ReminderNotifications
 import com.example.voicereminder.data.Reminder
 import com.example.voicereminder.data.ReminderStore
@@ -91,7 +94,7 @@ class MainActivity : ComponentActivity() {
                     onRefresh = { refreshToken++ },
                     onRequestPermissions = { requestRuntimePermissions() },
                     onRequestExactAlarm = { requestExactAlarmPermission() },
-                    onRequestAssistant = { requestAssistantRole() },
+                    onRequestAssistant = { openAssistantSettings() },
                     onOpenNotificationSettings = { openNotificationSettings() },
                     onStartVoice = {
                         activityLauncher.launch(Intent(this, VoiceCaptureActivity::class.java))
@@ -124,15 +127,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun requestAssistantRole() {
+    private fun openAssistantSettings() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val manager = getSystemService(RoleManager::class.java)
-            if (manager.isRoleAvailable(RoleManager.ROLE_ASSISTANT) &&
-                !manager.isRoleHeld(RoleManager.ROLE_ASSISTANT)
-            ) {
-                activityLauncher.launch(manager.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT))
+            if (manager.isRoleAvailable(RoleManager.ROLE_ASSISTANT)) {
+                activityLauncher.launch(
+                    manager.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT)
+                )
+                return
             }
         }
+
+        val candidates = listOf(
+            Intent(Settings.ACTION_VOICE_INPUT_SETTINGS),
+            Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS),
+            Intent(Settings.ACTION_SETTINGS)
+        )
+        candidates.firstOrNull { it.resolveActivity(packageManager) != null }
+            ?.let { activityLauncher.launch(it) }
     }
 
     private fun openNotificationSettings() {
@@ -192,6 +204,10 @@ private fun ReminderAppScreen(
                 Text(
                     "Скажи: «завтра в 12 позвонить врачу»",
                     style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    "Версия 0.2 — системный ассистент",
+                    style = MaterialTheme.typography.bodySmall
                 )
                 Spacer(Modifier.height(14.dp))
 
@@ -318,11 +334,10 @@ private fun SetupCard(
 
     val exactGranted = scheduler.canScheduleExact()
 
-    val assistantGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        val manager = context.getSystemService(RoleManager::class.java)
-        manager.isRoleAvailable(RoleManager.ROLE_ASSISTANT) &&
-            manager.isRoleHeld(RoleManager.ROLE_ASSISTANT)
-    } else false
+    val assistantGranted = VoiceInteractionService.isActiveService(
+        context,
+        ComponentName(context, ReminderVoiceInteractionService::class.java)
+    )
 
     if (micGranted && notificationsGranted && exactGranted && assistantGranted) return
 
@@ -352,11 +367,11 @@ private fun SetupCard(
                     onClick = onRequestExactAlarm
                 ) { Text("Разрешить точные напоминания") }
             }
-            if (!assistantGranted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (!assistantGranted) {
                 FilledTonalButton(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = onRequestAssistant
-                ) { Text("Сделать цифровым ассистентом") }
+                ) { Text("Выбрать VoiceReminder ассистентом") }
             }
             TextButton(
                 modifier = Modifier.fillMaxWidth(),

@@ -3,7 +3,6 @@ package com.example.voicereminder.voice
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -41,6 +40,10 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 class VoiceCaptureActivity : ComponentActivity(), RecognitionListener {
+
+    companion object {
+        const val EXTRA_FROM_ASSISTANT = "from_assistant"
+    }
 
     private var speechRecognizer: SpeechRecognizer? = null
     private var state by mutableStateOf("Нажмите и говорите")
@@ -117,21 +120,13 @@ class VoiceCaptureActivity : ComponentActivity(), RecognitionListener {
     }
 
     private fun startListening() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            state = "На телефоне не найден сервис распознавания речи"
+        speechRecognizer?.destroy()
+        speechRecognizer = SpeechRecognizerFactory.createExternal(this)
+        if (speechRecognizer == null) {
+            state = "На телефоне не найден внешний сервис распознавания речи"
             listening = false
             return
         }
-
-        speechRecognizer?.destroy()
-        speechRecognizer =
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                SpeechRecognizer.isOnDeviceRecognitionAvailable(this)
-            ) {
-                SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
-            } else {
-                SpeechRecognizer.createSpeechRecognizer(this)
-            }
 
         speechRecognizer?.setRecognitionListener(this)
 
