@@ -19,8 +19,10 @@ class ReminderActionReceiver : BroadcastReceiver() {
 
         when (intent.action) {
             ACTION_DONE -> {
-                store.markDone(id)
-                scheduler.cancel(id)
+                if (!reminder.isRepeating) {
+                    store.markDone(id)
+                    scheduler.cancel(id)
+                }
             }
 
             ACTION_SNOOZE_1H -> {
