@@ -10,24 +10,33 @@ import android.speech.SpeechRecognizer
 
 object SpeechRecognizerFactory {
     fun createExternal(context: Context): SpeechRecognizer? {
+        val services = context.packageManager.queryIntentServices(
+            Intent(RecognitionService.SERVICE_INTERFACE),
+            PackageManager.MATCH_ALL
+        )
+
+        val external = services
+            .asSequence()
+            .filter { it.serviceInfo?.packageName != context.packageName }
+            .sortedByDescending { it.priority }
+            .mapNotNull { it.serviceInfo }
+            .firstOrNull()
+
+        if (external != null) {
+            val component = ComponentName(external.packageName, external.name)
+            return SpeechRecognizer.createSpeechRecognizer(context, component)
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
             SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
         ) {
             return SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
         }
 
-        val services = context.packageManager.queryIntentServices(
-            Intent(RecognitionService.SERVICE_INTERFACE),
-            PackageManager.MATCH_ALL
-        )
-
-        val service = services
-            .asSequence()
-            .mapNotNull { it.serviceInfo }
-            .firstOrNull { it.packageName != context.packageName }
-            ?: return null
-
-        val component = ComponentName(service.packageName, service.name)
-        return SpeechRecognizer.createSpeechRecognizer(context, component)
+        return try {
+            SpeechRecognizer.createSpeechRecognizer(context)
+        } catch (_: Exception) {
+            null
+        }
     }
 }
