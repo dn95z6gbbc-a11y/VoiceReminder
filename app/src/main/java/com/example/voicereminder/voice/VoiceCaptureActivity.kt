@@ -35,6 +35,7 @@ import androidx.core.content.ContextCompat
 import com.example.voicereminder.alarm.AlarmScheduler
 import com.example.voicereminder.data.ReminderStore
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -50,6 +51,7 @@ class VoiceCaptureActivity : ComponentActivity(), RecognitionListener {
     private var recognized by mutableStateOf("")
     private var listening by mutableStateOf(false)
     private var saved by mutableStateOf(false)
+    private var pendingReminder: PendingReminder? = null
 
     private val micPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -96,7 +98,7 @@ class VoiceCaptureActivity : ComponentActivity(), RecognitionListener {
                                 modifier = Modifier.fillMaxWidth(),
                                 onClick = { ensureMicAndListen() }
                             ) {
-                                Text("Говорить")
+                                Text(if (pendingReminder == null) "Говорить" else "Сказать время")
                             }
                         }
                     }
@@ -119,11 +121,11 @@ class VoiceCaptureActivity : ComponentActivity(), RecognitionListener {
         }
     }
 
-    private fun startListening() {
+    private fun startListening(preserveRecognized: Boolean = false) {
         speechRecognizer?.destroy()
         speechRecognizer = SpeechRecognizerFactory.createExternal(this)
         if (speechRecognizer == null) {
-            state = "На телефоне не найден внешний сервис распознавания речи"
+            state = "На телефоне не найден сервис распознавания речи"
             listening = false
             return
         }
@@ -135,52 +137,132 @@ class VoiceCaptureActivity : ComponentActivity(), RecognitionListener {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ru-RU")
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ru-RU")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
         }
 
-        recognized = ""
+        if (!preserveRecognized) recognized = ""
         saved = false
-        state = "Говорите напоминание…"
+        state = if (pendingReminder == null) "Говорите напоминание…" else "Во сколько?"
         listening = true
         speechRecognizer?.startListening(intent)
     }
 
-    private fun consume(text: String) {
-        recognized = text
-        val parsed = RussianReminderParser.parse(text)
-        if (parsed == null) {
-            listening = false
-            state = "Не понял дату или время. Например: «завтра в 12 позвонить врачу»"
+    private data class ParsedCandidate(
+        val parsed: ParsedReminder,
+        val phrase: String,
+        val score: Float
+    )
+
+    private data class PendingCandidate(
+        val pending: PendingReminder,
+        val phrase: String,
+        val score: Float
+    )
+
+    private fun consumeCandidates(phrases: List<String>, confidences: FloatArray?) {
+        if (phrases.isEmpty()) {
+            onError(SpeechRecognizer.ERROR_NO_MATCH)
             return
         }
 
+        val pending = pendingReminder
+        if (pending != null) {
+            val choices = phrases.mapIndexedNotNull { index, phrase ->
+                RussianReminderParser.completeWithTime(pending, phrase)?.let { parsed ->
+                    ParsedCandidate(parsed, phrase, candidateScore(index, confidences))
+                }
+            }
+            val best = choices.maxByOrNull { it.score }
+            if (best != null) {
+                recognized = best.phrase
+                saveParsed(best.parsed)
+            } else {
+                recognized = phrases.first()
+                listening = false
+                state = "Не понял время. Скажи, например: «в 14:30»"
+            }
+            return
+        }
+
+        val parsedChoices = phrases.mapIndexedNotNull { index, phrase ->
+            RussianReminderParser.parse(phrase)?.let { parsed ->
+                ParsedCandidate(parsed, phrase, candidateScore(index, confidences))
+            }
+        }
+        val bestParsed = parsedChoices.maxByOrNull { it.score }
+        if (bestParsed != null) {
+            recognized = bestParsed.phrase
+            saveParsed(bestParsed.parsed)
+            return
+        }
+
+        val pendingChoices = phrases.mapIndexedNotNull { index, phrase ->
+            RussianReminderParser.parseNeedsTime(phrase)?.let { parsed ->
+                PendingCandidate(parsed, phrase, candidateScore(index, confidences))
+            }
+        }
+        val bestPending = pendingChoices.maxByOrNull { it.score }
+        if (bestPending != null) {
+            pendingReminder = bestPending.pending
+            listening = false
+            state = "Во сколько?"
+            recognized = "${bestPending.pending.title} • ${formatPendingDate(bestPending.pending.targetDate)}"
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (!isFinishing && !isDestroyed) startListening(preserveRecognized = true)
+            }, 550)
+            return
+        }
+
+        recognized = phrases.first()
+        listening = false
+        state = "Не понял когда напомнить. Попробуй: «через 5 минут», «сегодня в 17:30» или «во вторник в 12»"
+    }
+
+    private fun candidateScore(index: Int, confidences: FloatArray?): Float {
+        val confidence = confidences?.getOrNull(index) ?: -1f
+        return if (confidence >= 0f) {
+            confidence * 1000f - index
+        } else {
+            1000f - index * 10f
+        }
+    }
+
+    private fun saveParsed(parsed: ParsedReminder) {
         val store = ReminderStore(this)
         val reminder = store.insert(parsed.title, parsed.scheduledAt, parsed.repeatRule)
         AlarmScheduler(this).schedule(reminder)
 
-        val formatter = DateTimeFormatter.ofPattern("d MMMM, HH:mm", Locale("ru"))
+        val formatter = DateTimeFormatter.ofPattern("EEE, d MMMM • HH:mm", Locale("ru"))
         val whenText = Instant.ofEpochMilli(parsed.scheduledAt)
             .atZone(ZoneId.systemDefault())
             .format(formatter)
 
+        pendingReminder = null
         listening = false
         saved = true
         state = "Сохранено: $whenText"
         recognized = parsed.title
 
-        Handler(Looper.getMainLooper()).postDelayed({ finish() }, 1200)
+        Handler(Looper.getMainLooper()).postDelayed({ finish() }, 1400)
+    }
+
+    private fun formatPendingDate(date: LocalDate): String {
+        val formatter = DateTimeFormatter.ofPattern("EEE, d MMMM", Locale("ru"))
+        return date.format(formatter)
     }
 
     override fun onReadyForSpeech(params: Bundle?) {
-        state = "Слушаю…"
+        state = if (pendingReminder == null) "Слушаю…" else "Слушаю время…"
     }
 
     override fun onBeginningOfSpeech() {
-        state = "Слушаю…"
+        state = if (pendingReminder == null) "Слушаю…" else "Слушаю время…"
     }
 
     override fun onRmsChanged(rmsdB: Float) = Unit
     override fun onBufferReceived(buffer: ByteArray?) = Unit
+
     override fun onEndOfSpeech() {
         state = "Распознаю…"
     }
@@ -188,29 +270,35 @@ class VoiceCaptureActivity : ComponentActivity(), RecognitionListener {
     override fun onError(error: Int) {
         listening = false
         state = when (error) {
-            SpeechRecognizer.ERROR_NO_MATCH -> "Не расслышал. Попробуйте ещё раз."
-            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Не услышал речь. Попробуйте ещё раз."
+            SpeechRecognizer.ERROR_NO_MATCH -> if (pendingReminder == null) {
+                "Не расслышал. Попробуй ещё раз."
+            } else {
+                "Не расслышал время. Нажми «Сказать время» и повтори."
+            }
+            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> if (pendingReminder == null) {
+                "Не услышал речь. Попробуй ещё раз."
+            } else {
+                "Не услышал время. Нажми «Сказать время»."
+            }
             SpeechRecognizer.ERROR_NETWORK,
             SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Распознавание речи сейчас недоступно"
-            else -> "Ошибка распознавания ($error). Попробуйте ещё раз."
+            else -> "Ошибка распознавания ($error). Попробуй ещё раз."
         }
     }
 
     override fun onResults(results: Bundle?) {
         val phrases = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
-        val best = phrases.firstOrNull()
-        if (best == null) {
-            onError(SpeechRecognizer.ERROR_NO_MATCH)
-        } else {
-            consume(best)
-        }
+        val confidences = results?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)
+        consumeCandidates(phrases, confidences)
     }
 
     override fun onPartialResults(partialResults: Bundle?) {
         val phrases = partialResults
             ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
             .orEmpty()
-        phrases.firstOrNull()?.let { recognized = it }
+        phrases.firstOrNull()?.let { phrase ->
+            recognized = if (pendingReminder == null) phrase else "Время: $phrase"
+        }
     }
 
     override fun onEvent(eventType: Int, params: Bundle?) = Unit
